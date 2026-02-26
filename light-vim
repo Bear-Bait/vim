@@ -1,0 +1,287 @@
+-- ============================================================
+-- Minimal Neovim Config for Proxmox / Sysadmin Work
+-- Focus: shell, config files, logs, SSH sessions
+-- No Mason, no LSP, no heavy plugins
+-- ============================================================
+
+vim.g.mapleader = " "
+vim.g.maplocalleader = " "
+
+-- ── Core settings ────────────────────────────────────────────
+vim.opt.number         = true
+vim.opt.relativenumber = true
+vim.opt.mouse          = "a"
+vim.opt.clipboard      = "unnamedplus"
+vim.opt.ignorecase     = true
+vim.opt.smartcase      = true
+vim.opt.signcolumn     = "yes"
+vim.opt.updatetime     = 250
+vim.opt.splitright     = true
+vim.opt.splitbelow     = true
+vim.opt.scrolloff      = 8
+vim.opt.cursorline     = true
+vim.opt.termguicolors  = true
+vim.opt.undofile       = true            -- persistent undo across sessions
+vim.opt.swapfile       = false
+vim.opt.backup         = false
+vim.opt.wrap           = false
+vim.opt.hlsearch       = true
+vim.opt.incsearch      = true
+vim.opt.showmode       = false
+vim.opt.laststatus     = 2
+
+-- Indentation (configs are usually 2 or 4 spaces; tabs for systemd)
+vim.opt.expandtab   = true
+vim.opt.shiftwidth  = 2
+vim.opt.tabstop     = 2
+vim.opt.softtabstop = 2
+vim.opt.smartindent = true
+
+-- Show whitespace
+vim.opt.list      = true
+vim.opt.listchars = { tab = "→ ", trail = "·", nbsp = "␣" }
+
+-- Fold by indent (good for configs and YAML, no treesitter needed)
+vim.opt.foldmethod    = "indent"
+vim.opt.foldlevelstart = 99
+
+-- ── Bootstrap lazy.nvim ──────────────────────────────────────
+local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
+if not vim.loop.fs_stat(lazypath) then
+  vim.fn.system({
+    "git", "clone", "--filter=blob:none",
+    "https://github.com/folke/lazy.nvim.git",
+    "--branch=stable", lazypath,
+  })
+end
+vim.opt.rtp:prepend(lazypath)
+
+-- ── Plugins ──────────────────────────────────────────────────
+require("lazy").setup({
+
+  -- Colorscheme: Habamax ships with Neovim, dark, low-contrast, readable on
+  -- any terminal. No external dependency.
+  {
+    "rebelot/kanagawa.nvim",
+    lazy = false,
+    priority = 1000,
+    config = function()
+      require("kanagawa").setup({
+        compile = false,
+        dimInactive = true,
+        theme = "wave",         -- "wave" | "dragon" | "lotus"
+        background = { dark = "wave", light = "lotus" },
+      })
+      vim.cmd("colorscheme kanagawa")
+    end,
+  },
+
+  -- Fuzzy finder: files, grep, buffers — the only navigation you need
+  {
+    "nvim-telescope/telescope.nvim",
+    branch = "0.1.x",
+    dependencies = {
+      "nvim-lua/plenary.nvim",
+      {
+        "nvim-telescope/telescope-fzf-native.nvim",
+        build = "make",
+        cond = function() return vim.fn.executable("make") == 1 end,
+      },
+    },
+    config = function()
+      local telescope = require("telescope")
+      local builtin   = require("telescope.builtin")
+
+      telescope.setup({
+        defaults = {
+          path_display        = { "truncate" },
+          file_ignore_patterns = { ".git/", "node_modules" },
+          layout_config       = { horizontal = { preview_width = 0.5 } },
+        },
+        pickers = {
+          find_files = { hidden = true },
+        },
+      })
+      pcall(telescope.load_extension, "fzf")
+
+      vim.keymap.set("n", "<leader>ff", builtin.find_files,  { desc = "Find files" })
+      vim.keymap.set("n", "<leader>fg", builtin.live_grep,   { desc = "Live grep" })
+      vim.keymap.set("n", "<leader>fb", builtin.buffers,     { desc = "Buffers" })
+      vim.keymap.set("n", "<leader>fr", builtin.oldfiles,    { desc = "Recent files" })
+      vim.keymap.set("n", "<leader>fh", builtin.help_tags,   { desc = "Help tags" })
+      vim.keymap.set("n", "<leader>f/", builtin.current_buffer_fuzzy_find, { desc = "Fuzzy in buffer" })
+
+      -- Grep for word under cursor — great for grepping log keywords
+      vim.keymap.set("n", "<leader>fw", builtin.grep_string, { desc = "Grep word under cursor" })
+    end,
+  },
+
+  -- Git signs in gutter + hunk operations
+  {
+    "lewis6991/gitsigns.nvim",
+    opts = {
+      signs = {
+        add          = { text = "+" },
+        change       = { text = "~" },
+        delete       = { text = "_" },
+        topdelete    = { text = "‾" },
+        changedelete = { text = "~" },
+      },
+      on_attach = function(bufnr)
+        local gs = package.loaded.gitsigns
+        local function map(mode, l, r, desc)
+          vim.keymap.set(mode, l, r, { buffer = bufnr, desc = desc })
+        end
+        map("n", "]c",         gs.next_hunk,              "Next hunk")
+        map("n", "[c",         gs.prev_hunk,              "Prev hunk")
+        map("n", "<leader>hs", gs.stage_hunk,             "Stage hunk")
+        map("n", "<leader>hr", gs.reset_hunk,             "Reset hunk")
+        map("n", "<leader>hb", function() gs.blame_line({ full = true }) end, "Blame line")
+        map("n", "<leader>hd", gs.diffthis,               "Diff this")
+        map("n", "<leader>tb", gs.toggle_current_line_blame, "Toggle blame")
+      end,
+    },
+  },
+
+  -- Minimal statusline — just mode, file, git, position
+  {
+    "nvim-lualine/lualine.nvim",
+    config = function()
+      require("lualine").setup({
+        options = {
+          theme                = "auto",
+          globalstatus         = true,
+          component_separators = { left = "|", right = "|" },
+          section_separators   = { left = "",  right = "" },
+        },
+        sections = {
+          lualine_a = { "mode" },
+          lualine_b = { "branch", "diff" },
+          lualine_c = { { "filename", path = 1 } },
+          lualine_x = { "diagnostics", "filetype" },
+          lualine_y = { "progress" },
+          lualine_z = { "location" },
+        },
+      })
+    end,
+  },
+
+  -- Better syntax highlighting for shell, nginx, systemd, etc.
+  -- (No LSP; treesitter alone is enough for config file work)
+  {
+    "nvim-treesitter/nvim-treesitter",
+    build = ":TSUpdate",
+    config = function()
+      require("nvim-treesitter.configs").setup({
+        ensure_installed = {
+          "bash", "lua", "python",
+          "ini",  "toml", "yaml", "json",
+          "nginx", "dockerfile",
+          "vim", "vimdoc",
+        },
+        auto_install    = false,
+        highlight       = { enable = true },
+        indent          = { enable = true },
+      })
+    end,
+  },
+
+  -- Auto-pairs (brackets, quotes)
+  { "windwp/nvim-autopairs", event = "InsertEnter", config = true },
+
+  -- Comment toggling: gcc / gc<motion>
+  { "numToStr/Comment.nvim", lazy = false, opts = {} },
+
+  -- Surround: ys, cs, ds
+  {
+    "kylechui/nvim-surround",
+    version = "*",
+    event   = "VeryLazy",
+    config  = function() require("nvim-surround").setup({}) end,
+  },
+
+  -- Show pending keybindings
+  {
+    "folke/which-key.nvim",
+    event = "VeryLazy",
+    config = function()
+      require("which-key").setup()
+      require("which-key").add({
+        { "<leader>f", group = "[F]ind (Telescope)" },
+        { "<leader>h", group = "Git [H]unk" },
+        { "<leader>t", group = "[T]oggle" },
+      })
+    end,
+  },
+
+}, {
+  ui = { border = "rounded" },
+})
+
+-- ── Key mappings ─────────────────────────────────────────────
+
+-- Clear search highlight
+vim.keymap.set("n", "<Esc>", "<cmd>nohlsearch<CR>")
+
+-- Window navigation
+vim.keymap.set("n", "<C-h>", "<C-w>h")
+vim.keymap.set("n", "<C-j>", "<C-w>j")
+vim.keymap.set("n", "<C-k>", "<C-w>k")
+vim.keymap.set("n", "<C-l>", "<C-w>l")
+
+-- Visual indenting (keep selection)
+vim.keymap.set("v", "<", "<gv")
+vim.keymap.set("v", ">", ">gv")
+
+-- Move selected lines
+vim.keymap.set("v", "J", ":m '>+1<CR>gv=gv")
+vim.keymap.set("v", "K", ":m '<-2<CR>gv=gv")
+
+-- Paste without clobbering register
+vim.keymap.set("x", "<leader>p", [["_dP]], { desc = "Paste without yanking" })
+
+-- Quickly edit this file
+vim.keymap.set("n", "<leader>ve", "<cmd>edit $MYVIMRC<CR>",   { desc = "Edit init.lua" })
+vim.keymap.set("n", "<leader>vr", "<cmd>source $MYVIMRC<CR>", { desc = "Reload init.lua" })
+
+-- Terminal: open a shell split (handy on Proxmox host)
+vim.keymap.set("n", "<leader>ts", "<cmd>split | terminal<CR>", { desc = "Terminal split" })
+vim.keymap.set("n", "<leader>tv", "<cmd>vsplit | terminal<CR>", { desc = "Terminal vsplit" })
+vim.keymap.set("t", "<Esc><Esc>", "<C-\\><C-n>",               { desc = "Exit terminal mode" })
+
+-- Quick save
+vim.keymap.set("n", "<leader>w", "<cmd>write<CR>", { desc = "Save" })
+vim.keymap.set("n", "<leader>W", "<cmd>wall<CR>",  { desc = "Save all" })
+
+-- ── Highlight on yank ────────────────────────────────────────
+vim.api.nvim_create_autocmd("TextYankPost", {
+  desc     = "Highlight yanked text",
+  group    = vim.api.nvim_create_augroup("highlight-yank", { clear = true }),
+  callback = function() vim.highlight.on_yank() end,
+})
+
+-- ── Filetype overrides ───────────────────────────────────────
+-- Most Proxmox/Debian config files want 4-space or tab indentation
+vim.api.nvim_create_autocmd("FileType", {
+  pattern  = { "sh", "bash", "python" },
+  callback = function()
+    vim.opt_local.shiftwidth  = 4
+    vim.opt_local.tabstop     = 4
+    vim.opt_local.softtabstop = 4
+  end,
+})
+
+-- systemd unit files: use tabs
+vim.api.nvim_create_autocmd({ "BufRead", "BufNewFile" }, {
+  pattern  = { "*.service", "*.timer", "*.socket", "*.target" },
+  callback = function()
+    vim.opt_local.expandtab = false
+    vim.opt_local.tabstop   = 8
+  end,
+})
+
+-- Treat .conf files as dosini (catches most /etc/ configs)
+vim.api.nvim_create_autocmd({ "BufRead", "BufNewFile" }, {
+  pattern  = { "*.conf", "sshd_config", "ssh_config", "resolv.conf" },
+  callback = function() vim.bo.filetype = "dosini" end,
+})
